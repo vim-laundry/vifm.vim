@@ -1,4 +1,4 @@
-*vifm-app.txt*    For Vifm version 0.11  Last change: 2021 Apr 30
+*vifm-app.txt*    For Vifm version 0.11  Last change: 2021 Aug 14
 
  Email for bugs and suggestions: <xaizek@posteo.net>
 
@@ -33,6 +33,7 @@
 |vifm-color-schemes|      Details on using color schemes in vifm.
 |vifm-trash|              Details about trash directory in vifm.
 |vifm-clientserver|       Client-server communication.
+|vifm-ext-rename|         About editing buffer of file names in an editor.
 |vifm-plugin|             Using the vifm.vim plugin.
 |vifm-reserved|           List of reserved commands.
 |vifm-env-vars|           Environment variables that affect vifm or set by it.
@@ -413,6 +414,24 @@ zd                                             *vifm-zd*
     |vifm-'incsearch'| option.  This kind of filter is automatically reset
     when directory is changed.
 
+Tree-related Keys~
+
+While some of the keys make sense outside of tree-view, they are most useful
+in trees.
+
+[z  go to first sibling of current entry.      *vifm-[z*
+]z  go to last sibling of current entry.       *vifm-]z*
+
+
+zj                                             *vifm-zj*
+    go to next directory sibling of current entry or do nothing.
+
+zk                                             *vifm-zk*
+    go to previous directory sibling of current entry or do nothing.
+
+
+zx  toggle fold under the cursor.              *vifm-zx*
+
 Other Normal Mode Keys~
 
 [count]:                                       *vifm-:*
@@ -518,7 +537,8 @@ i                                              *vifm-i*
 
 
 cw                                             *vifm-cw*
-    change word is used to rename a file or files.
+    change word is used to rename a file or files.  If multiple files are
+    selected, behaves as |vifm-:rename| command run without arguments.
 
 cW                                             *vifm-cW*
     change WORD is used to change only name of file (without extension).
@@ -658,17 +678,6 @@ ZZ - same as |vifm-:quit|.                       *vifm-ZZ*
 
 ]s                                             *vifm-]s*
     go to next selected entry or do nothing.
-
-
-[z  go to first sibling of current entry.      *vifm-[z*
-]z  go to last sibling of current entry.       *vifm-]z*
-
-
-zj                                             *vifm-zj*
-    go to next directory sibling of current entry or do nothing.
-
-zk                                             *vifm-zk*
-    go to previous directory sibling of current entry or do nothing.
 
 Using Count~
                                                *vifm-count* *vifm-[count]*
@@ -811,6 +820,9 @@ gu, u                                          *vifm-v_gu* *vifm-v_u*
 
 gU, U                                          *vifm-v_gU* *vifm-v_U*
     make names of selected files uppercase.
+
+cw                                             *vifm-v_cw*
+    same as running |vifm-:rename| command without arguments.
 
 --------------------------------------------------------------------------------
 *vifm-view*
@@ -1466,9 +1478,9 @@ The builtin commands are:
                                                *vifm-:compare*
 :compare [byname | bysize | bycontents | listall | listunique | listdups |
           ofboth | ofone | groupids | grouppaths | skipempty]...
-    compare files in one or two views according the arguments.  The default
+    compare files in one or two views according to the arguments.  The default
     is "bycontents listall ofboth grouppaths".  See |vifm-compare-views| for
-    details.  Tree structure is incompatible with alternative representations,
+    details.  Diff structure is incompatible with alternative representations,
     so values of |vifm-'lsview'| and |vifm-'millerview'| options are ignored.
 
 :cope[n]                                       *vifm-:copen* *vifm-:cope*
@@ -1681,7 +1693,8 @@ The builtin commands are:
     When the command doesn't contain any of vifm macros, name of current file
     is appended as if command ended with |vifm-%c| macro.  Comma escaping and
     missing commands processing rules as for |vifm-:filetype| apply to this
-    command.  See |vifm-patterns| for pattern definition.
+    command.  See |vifm-patterns| for pattern definition.  Supports
+    |vifm-lua-handlers|.
 
     Example for zip archives: >
 
@@ -1780,10 +1793,11 @@ The builtin commands are:
     display information on given highlight group or file name pattern of color
     scheme used in the active view.
 :hi[ghlight] ( group-name | {pat1,pat2,...} | /regexp/[iI] )
-             cterm=style | ctermfg=color | ctermbg=color
-    set style (cterm), foreground (ctermfg) or/and background (ctermbg)
-    parameters of highlight group or file name pattern for color scheme
-    used in the active view.
+             cterm=style | ctermfg=color | ctermbg=color |
+             gui=style | guifg=color | guibg=color
+    set style (cterm, gui), foreground (ctermfg, guifg) and/or
+    background (ctermbg, guibg) parameters of highlight group or file name
+    pattern for color scheme used in the active view.
 
 All style values as well as color names are case insensitive.
 
@@ -1841,6 +1855,10 @@ Available colors:
  - cyan    and lightcyan
  - white   and lightwhite
  - 0-255 - corresponding colors from 256-color palette
+           (for ctermfg and ctermbg)
+ - #rrggbb - direct ("gui", "true", 24-bit) color in hex-notation, each of
+             the three compontents are in the range 0x00 to 0xff
+             (for guifg and guibg)
 
 Light versions of colors are regular colors with bold attribute set
 automatically in terminals that have less than 16 colors.  So order of arguments
@@ -1956,6 +1974,13 @@ also be set via X resources), e.g. xterm-256color.  One can find list of
 available terminal names by listing /usr/lib/terminfo/.  Number of colors
 supported by terminal with current settings can be checked via "tput colors"
 command.
+
+In order to use 24-bit colors one needs a terminal that supports them,
+corresponding terminfo record (probably ends in "-direct" like in
+"xterm-direct") and $TERM pointing to it.  When vifm detects direct color
+support "cterm*" values are ignored for groups which have at least one of
+"gui*" values set, otherwise they are used after translating via a builtin
+palette.
 
 Here is the hierarchy of highlight groups, which you need to know for using
 transparency:
@@ -2203,8 +2228,8 @@ order using the '.' operator.  Any whitespace is ignored.
 
                                                *vifm-:rename*
 :[range]rename[!]
-    rename files using vi to edit names. ! means go recursively through
-    directories.
+    rename files by editing their names in an editor.  "!" renames files
+    recursively in subdirectories.  See |vifm-ext-rename|.
 :[range]rename name1 name2...
     rename each of selected files to a corresponding name.
 
@@ -2372,6 +2397,12 @@ yet supported) and might be changed in future releases, or get an alias.
     other pane to the path (absolute or relative to current directory of
     active pane).
 
+                                               *vifm-:stop* *vifm-:st*
+:st[op]
+    suspend vifm (same as pressing Ctrl-Z).  Does nothing if this instance
+    isn't running in a shell.  The command exists to allow mapping to the
+    action of Ctrl-Z.
+
                                                *vifm-:substitute* *vifm-:s*
 :[range]s[ubstitute]/pattern/string/[flags]
     for each file in range replace a match of pattern with string.  String
@@ -2464,7 +2495,7 @@ yet supported) and might be changed in future releases, or get an alias.
     |vifm-menus-and-dialogs| for controls.
 
                                                *vifm-:tree*
-:tree
+:tree [depth=N]
     turn pane into tree view with current directory as its root.  The tree
     view is implemented on top of a custom view, but is automatically kept in
     sync with file system state and considers all the filters.  Thus the
@@ -2478,6 +2509,9 @@ yet supported) and might be changed in future releases, or get an alias.
 
     Tree structure is incompatible with alternative representations, so
     values of |vifm-'lsview'| and |vifm-'millerview'| options are ignored.
+
+    The "depth" argument specifies nesting level on which loading of
+    subdirectories won't happen (they will be folded).  Values start at 1.
 :tree!
     toggle current view in and out of tree mode.
 
@@ -2732,14 +2766,14 @@ The command macros may be used in user commands.
                                                                *vifm-%v*
   %v        same as %s, but splits vertically.
                                                                *vifm-%n*
-  %n        forbid using of terminal multiplexer to run the command.
+  %n        forbid use of terminal multiplexer to run the command.
                                                                *vifm-%i*
   %i        completely ignore command output.  For background jobs this
             suppresses error dialogs, while still storing errors
             internally for viewing via |vifm-:jobs| menu.
 
                                                                *vifm-%Pl*
-  %Pl       pipe list of files to standard input of a background process.
+  %Pl       pipe list of files to standard input of a command.
                                                                *vifm-%Pz*
   %Pz       same as %Pz, but separates paths by null ('\0') character.
 
@@ -2767,9 +2801,12 @@ The command macros may be used in user commands.
 
 Use %% if you need to put a percent sign in your command.
 
-Note that %i, %Iu, %IU, %m, %M, %n, %q, %Pl, %Pz, %s, %S, %u, %U and %v macros
-are mutually exclusive.  Only the last one of them on the command will take
+Note that %i, %Iu, %IU, %m, %M, %n, %q, %s, %S, %u, %U and %v macros are
+mutually exclusive.  Only the last one of them on the command will take
 effect.
+
+Note that %Pl and %Pz are mutually exclusive.  Only the last one of them on
+the command will take effect.
 
                                                      *vifm-filename-modifiers*
 You can use file name modifiers after %c, %C, %f, %F, %b, %d and %D macros.
@@ -3605,6 +3642,7 @@ view mode).
     item               default  meaning ~
     graphicsdelay:num  0        delay before drawing graphics (microseconds)
     hardgraphicsclear  unset    redraw screen to get rid of graphics
+    toptreestats       unset    show file counts before the tree
 
 graphicsdelay is needed if terminal requires some timeout before it can
 draw graphics (otherwise it gets lost).
@@ -3935,6 +3973,8 @@ default: ""
 Determines the content of the status line (the line right above command-line).
 Empty string means use same format like in previous versions.  Following macros
 are supported:
+    %N - line break (increases height of the status line accordingly), ignores
+         %[ %] blocks
     %t - file name (considering value of the |vifm-'classify'| option)
     %T - symbolic link target (empty for other filetypes)
     %f - file name relative to current directory (considers 'classify')
@@ -4189,6 +4229,14 @@ are visible.
 u - use Unicode characters in the TUI (Unicode ellipsis instead of "...").
                                                *vifm-to-v*
 v - vary width of middle border to equalize view sizes.
+
+Each pane title contains the path of the listed directory.  If too large, the
+path is truncated on the left for the active pane and on the right for the other
+pane.  This can be modified with:
+                                               *vifm-to-l*
+l - truncation is always on the left.
+                                               *vifm-to-r*
+r - truncation is always on the right.
 
                                                *vifm-'undolevels'* *vifm-'ul'*
 undolevels ul
@@ -5321,7 +5369,8 @@ pane).
 
 Files are gathered in this way:
  - recursively starting at current location of the view;
- - dot files are excluded if view hides them at the moment of comparison;
+ - dot files are excluded if view hides them at the moment of comparison, file
+   name filters are obeyed as well so you end up comparing what you see;
  - directories are not taken into account;
  - symbolic links to directories are ignored.
 
@@ -5810,6 +5859,28 @@ option.  Name of the current one is available via v:servername.
 v:servername                                   *vifm-servername-variable*
     server name of the running vifm instance.  Empty if client-server feature
     is disabled.
+
+--------------------------------------------------------------------------------
+*vifm-ext-rename*
+
+When an editor is run to edit list of file names, contents of the temporary file
+has the following format:
+ 1. Order of lines correspond to the order of files in a view.
+ 2. Lines that start with a "#" are comments and are ignored.
+ 3. Single backslash at the beginning of a line is ignored, so that a file
+    starting with a backslash will appear like "\#name".
+
+If an operation was rejected due to issues with file names, next time you'll see
+the following in this order:
+ 1. Last error (in comments).
+ 2. Original file names (in comments).
+ 3. Failed list of new names.
+
+Mind that |vifm-plugin| will extract list of original names and show them in a
+vertical split.
+
+You can cancel renaming by removing all non-comments from the buffer.  This
+also erases information about previous edits.
 
 --------------------------------------------------------------------------------
 *vifm-plugin*
