@@ -1,5 +1,5 @@
 " Maintainer: xaizek <xaizek@posteo.net>
-" Last Change: 2021 March 22
+" Last Change: 2023 July 3
 
 " Author: Ken Steen <ksteen@users.sourceforge.net>
 " Last Change: 2001 November 29
@@ -19,6 +19,7 @@ let s:script_path = expand('<sfile>')
 " Setup commands to run vifm.
 
 " :EditVifm - open file or files in current buffer.
+" :PeditVifm - open file in preview window.
 " :SplitVifm - split buffer and open file or files.
 " :VsplitVifm - vertically split buffer and open file or files.
 " :DiffVifm - load file for :vert diffsplit.
@@ -41,6 +42,8 @@ command! -bar -nargs=* -count -complete=dir Vifm
 			\ :call s:StartVifm('<mods>', <count>, 'edit', <f-args>)
 command! -bar -nargs=* -count -complete=dir EditVifm
 			\ :call s:StartVifm('<mods>', <count>, 'edit', <f-args>)
+command! -bar -nargs=* -count -complete=dir PeditVifm
+			\ :call s:StartVifm('<mods>', <count>, 'pedit', <f-args>)
 command! -bar -nargs=* -count -complete=dir VsplitVifm
 			\ :call s:StartVifm('<mods>', <count>, 'vsplit', <f-args>)
 command! -bar -nargs=* -count -complete=dir SplitVifm
@@ -65,7 +68,7 @@ if !has('nvim') && exists('*term_start')
 		if (bufnr('%') == bufnr('#') || !bufexists(0)) && !data.split
 			enew
 		else
-			buffer #
+			silent! buffer #
 		endif
 		silent! bdelete! #
 		if data.split
@@ -74,7 +77,8 @@ if !has('nvim') && exists('*term_start')
 		if has('job') && type(data.cwdjob) == v:t_job
 			call job_stop(data.cwdjob)
 		endif
-		call s:HandleRunResults(a:code, data.listf, data.typef, data.editcmd)
+		call s:HandleRunResults(a:code, data.listf, data.typef, data.editcmd,
+		                      \ data.snapshot)
 	endfunction
 endif
 
@@ -119,9 +123,12 @@ function! s:StartVifm(mods, count, editcmd, ...) abort
 	    \ '+command VsplitVim :let $VIFM_OPEN_TYPE=''vsplit''' . edit,
 	    \ '+command SplitVim  :let $VIFM_OPEN_TYPE=''split''' . edit,
 	    \ '+command DiffVim   :let $VIFM_OPEN_TYPE=''vert diffsplit''' . edit,
+	    \ '+command PeditVim  :let $VIFM_OPEN_TYPE=''pedit''' . edit,
 	    \ '+command TabVim    :let $VIFM_OPEN_TYPE='''.s:tab_drop_cmd."'" . edit]
 	call map(pickargs, embed ? 'shellescape(v:val)' : 'shellescape(v:val, 1)')
 	let pickargsstr = join(pickargs, ' ')
+
+	let bufsnapshot = s:TakeBufferSnapshot()
 
 	" Use embedded terminal if available.
 	if embed
@@ -134,7 +141,8 @@ function! s:StartVifm(mods, count, editcmd, ...) abort
 		endif
 
 		let data = { 'listf' : listf, 'typef' : typef, 'editcmd' : a:editcmd,
-					\ 'cwdjob' : cwdjob, 'split': get(g:, 'vifm_embed_split', 0) }
+					\ 'cwdjob' : cwdjob, 'split': get(g:, 'vifm_embed_split', 0),
+					\ 'snapshot' : bufsnapshot }
 
 		if !has('nvim')
 			let env = { 'TERM' : s:DetermineTermEnv() }
@@ -145,7 +153,7 @@ function! s:StartVifm(mods, count, editcmd, ...) abort
 				if (bufnr('%') == bufnr('#') || !bufexists(0)) && !self.split
 					enew
 				else
-					buffer #
+					silent! buffer #
 				endif
 				silent! bdelete! #
 				if self.split
@@ -154,7 +162,8 @@ function! s:StartVifm(mods, count, editcmd, ...) abort
 				if self.cwdjob != 0
 					call jobstop(self.cwdjob)
 				endif
-				call s:HandleRunResults(a:code, self.listf, self.typef, self.editcmd)
+				call s:HandleRunResults(a:code, self.listf, self.typef, self.editcmd,
+				                      \ self.snapshot)
 			endfunction
 		endif
 
@@ -178,7 +187,8 @@ function! s:StartVifm(mods, count, editcmd, ...) abort
 
 			let oldbuf = bufname('%')
 			execute 'keepalt file' escape('vifm: '.a:editcmd, ' |')
-			setlocal nonumber norelativenumber
+			" This is for Neovim, which uses these options even in terminal mode
+			setlocal nonumber norelativenumber nospell
 			execute bufnr(oldbuf).'bwipeout'
 			" Use execute to not break highlighting.
 			execute 'startinsert'
@@ -188,17 +198,49 @@ function! s:StartVifm(mods, count, editcmd, ...) abort
 	else
 		" Gvim cannot handle ncurses so run vifm in a terminal.
 		if has('gui_running')
-			execute 'silent !' g:vifm_term g:vifm_exec g:vifm_exec_args ldir rdir
-			      \ pickargsstr
+			execute 'silent noautocmd !'
+			      \ g:vifm_term g:vifm_exec g:vifm_exec_args ldir rdir pickargsstr
 		else
-			execute 'silent !' g:vifm_exec g:vifm_exec_args ldir rdir pickargsstr
+			execute 'silent noautocmd !'
+			      \ g:vifm_exec g:vifm_exec_args ldir rdir pickargsstr
 		endif
 
 		" Execution of external command might have left Vim's window cleared, force
 		" redraw before doing anything else.
 		redraw!
 
-		call s:HandleRunResults(v:shell_error, listf, typef, a:editcmd)
+		call s:HandleRunResults(v:shell_error, listf, typef, a:editcmd, bufsnapshot)
+	endif
+endfunction
+
+" Makes list of open buffers backed up by files.  Invoked before starting a Vifm
+" instance.
+function s:TakeBufferSnapshot() abort
+	let buffer_snapshot = []
+	for buf in getbufinfo({ 'buflisted': 1 })
+		if filereadable(buf.name)
+			call add(buffer_snapshot, buf.bufnr)
+		endif
+	endfor
+	return buffer_snapshot
+endfunction
+
+" Closes unchanged buffers snapshotted by TakeBufferSnapshot() which no longer
+" correspond to any buffer.  Invoked after Vifm has closed (even with an error
+" code, because file system could have been updated).
+function s:DropGoneBuffers(buffer_snapshot) abort
+	let gone_buffers = []
+	for bufnr in a:buffer_snapshot
+		if bufexists(bufnr)
+			let info = getbufinfo(bufnr)[0]
+			" Do not close a changed buffer even if its file is gone.
+			if !info.changed && !filereadable(info.name)
+				call add(gone_buffers, bufnr)
+			endif
+		endif
+	endfor
+	if !empty(gone_buffers)
+		execute 'silent! bwipeout ' join(gone_buffers, ' ')
 	endif
 endfunction
 
@@ -240,7 +282,10 @@ function! s:HandleCwdOut(data) abort
 	exec 'cd ' . fnameescape(a:data)
 endfunction
 
-function! s:HandleRunResults(exitcode, listf, typef, editcmd) abort
+function! s:HandleRunResults(exitcode, listf, typef, editcmd, bufsnapshot) abort
+	" Call this even on non-zero exit code.
+	call s:DropGoneBuffers(a:bufsnapshot)
+
 	if a:exitcode != 0
 		echoerr 'Got non-zero code from vifm: ' . a:exitcode
 		call delete(a:listf)
@@ -286,6 +331,9 @@ function! s:HandleRunResults(exitcode, listf, typef, editcmd) abort
 	if empty(expand('%')) && editcmd =~ '^v\?split$'
 		execute 'edit' fnamemodify(flist[0], ':.')
 		let flist = flist[1:-1]
+		if len(flist) == 0
+			return
+		endif
 	endif
 
 	" We emulate :args to not leave unnamed buffer around after we open our
@@ -294,12 +342,23 @@ function! s:HandleRunResults(exitcode, listf, typef, editcmd) abort
 		silent! %argdelete
 	endif
 
+	" Doesn't make sense to run :pedit multiple times in a row.
+	if editcmd == 'pedit' && len(flist) > 1
+		let flist = [ flist[0] ]
+	endif
+
 	for file in flist
 		execute editcmd fnamemodify(file, ':.')
 		if editcmd == 'edit' && len(flist) > 1
 			execute 'argadd' fnamemodify(file, ':.')
 		endif
 	endfor
+
+	" When we open a single file, there is no need to navigate to its window,
+	" because we're already there
+	if len(flist) == 1
+		return
+	endif
 
 	" Go to the first file working around possibility that :drop command is not
 	" evailable, if possible
@@ -400,8 +459,13 @@ endfunction
 if get(g:, 'vifm_replace_netrw')
 	function! s:HandleBufEnter(fname) abort
 		if a:fname !=# '' && isdirectory(a:fname)
-			buffer #
+			if bufexists(0)
+				buffer #
+			else
+				enew
+			endif
 			silent! bdelete! #
+
 			let embed_split = get(g:, 'vifm_embed_split', 0)
 			let g:vifm_embed_split = 0
 			exec get(g:, 'vifm_replace_netrw_cmd', 'Vifm') . ' ' . a:fname
